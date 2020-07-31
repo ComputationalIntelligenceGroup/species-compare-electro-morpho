@@ -1,0 +1,377 @@
+---
+title: "allen-electro-morpho"
+output: html_document
+--- 
+
+```{r}
+rm(list = ls())
+library(bnlearn)
+library(ggplot2)
+library(tidyverse)
+devtools::load_all()
+insertSource("allen-electro-bnlearn-layout.R", 'bnlearn', 
+             functions = c('graphviz.backend', 'graphviz.compare.backend', 'graphviz.compare'))
+load('../data/allen-electro-morpho.rdata')
+```  
+
+# Electro
+
+## Learn bn mouse
+```{r} 
+db <- ep %>% filter(species == 'Mus musculus') %>% select(-species, -reconstruction_type, -structure_layer_name, -specimen_id)
+mouse <- tabu(db, score = "bic-g", tabu = 30, max.tabu = 30)
+pcorm <- apply(arcs(mouse), 1, function(x) get_pcor(x[1], x[2], db)) %>% round(digits = 2) 
+acor <- get_arcs_cor(mouse, db)
+acor    %>% arrange(`acor.indi.`)
+```    
+  
+
+# Learn bn 2/3 human
+```{r} 
+db <- ep %>% filter(species == 'Homo Sapiens') %>% select(-species, -reconstruction_type, -structure_layer_name, -specimen_id) 
+human <- tabu(db, score = "bic-g", tabu = 30, max.tabu = 30)  
+pcorh <- apply(arcs(human), 1, function(x) get_pcor(x[1], x[2], db)) %>% round(digits = 2)
+acor <- get_arcs_cor(human, db)  
+acor    %>% arrange(`acor.indi.`)
+```
+
+# Compare plot   
+```{r}  
+pdf(file = 'electro-test.pdf', width = 14, height = 7) 
+a <- bnlearn::graphviz.compare(mouse, human, layout = 'fdp', diff = 'none', 
+             edgeAttrs=get_edge_attrs(mouse, pcorm))         
+mgraph <- format_edges(a[[1]], mouse, morphodb, pcorm)
+a <- bnlearn::graphviz.compare(mouse, human, layout = 'fdp', diff = 'none', 
+             edgeAttrs=get_edge_attrs(human, pcorh))
+             # edgeAttrs=get_edge_attrs(mouse, pcorm))
+hgraph <- format_edges(a[[2]], human, morphodb, pcorh) 
+dev.off()  
+pdf(file = 'electro-mouse.pdf', width = 14, height = 7)  
+graph::nodeRenderInfo(mgraph)[["fontsize"]] = 60 
+Rgraphviz::renderGraph(mgraph) 
+dev.off() 
+pdf(file = 'electro-human.pdf', width = 14, height = 7)   
+graph::nodeRenderInfo(hgraph)[["fontsize"]] = 60 
+Rgraphviz::renderGraph(hgraph) 
+dev.off() 
+```       
+
+<!-- # Markov blankets Species -->
+<!-- - How many features do not have species in their Markov blanket? -->
+<!-- - Only "input_resistance" does not have species in MB -->
+<!-- - This is symmetric to the other one? -->
+<!-- ```{r} -->
+<!-- # mbs <- lapply(nodes(orig), function(x) mb(orig, x)) -->
+<!-- # spec <- sapply(mbs, function(x) 'species' %in% x) -->
+<!-- # nodes(orig)[!spec] -->
+<!-- ``` -->
+
+## Human bn
+```{r}
+marindep <- sapply(nodes(human), function(x) dsep(human, 'rel depth', x))
+nodes(human)[!marindep]
+mb(human, 'rel depth')
+mbsh <- lapply(nodes(human), function(x) mb(human, x))
+mbsh <- setNames(mbsh, nodes(human))
+sapply(mbsh, length)
+```
+
+## Mouse bn
+```{r} 
+mb(mouse, 'rel depth') 
+marindep <- sapply(nodes(mouse), function(x) dsep(mouse, 'rel depth', x))
+nodes(human)[!marindep]
+mbsm <- lapply(nodes(mouse), function(x) mb(mouse, x))
+mbsm <- setNames(mbsm, nodes(mouse)) 
+sapply(mbsh, length)
+```
+  
+## Markov blankets across species 
+- The Markov blankets differed substantially between mouse and human
+- The most similar mb was that of 
+```{r}  
+mapply(function(a, b) length(intersect(a, b)), mbsh, mbsm)
+mapply(function(a, b) length(intersect(a, b)) / length(a), mbsh, mbsm)
+mapply(function(a, b) length(intersect(a, b)) / length(b), mbsh, mbsm)
+nodes(mouse)[6]
+```  
+## Compare graphs
+```{r}
+bnlearn::compare(human, mouse, arcs = TRUE)
+```
+
+
+## Do a test comparison t-test         
+- Some of these are actually not significant
+```{r}
+tvars <- ep %>% select(-species, -reconstruction_type, -structure_layer_name, -specimen_id,
+                       -`rel depth`)  %>% mutate(species = ep$species)   
+table <- get_ttest_pvals(tvars)  
+table[, -1] <- round(table[, -1], 3)
+indi <- grep('time', table$variable)
+table[-indi, -1] <- round(table[-indi, -1], 2) 
+table$Humanm <- table$`mean_Homo Sapiens`
+table$Humanpm <- '$\\pm$'
+table$Humansd <- table$`sd_Homo Sapiens`
+table$Mousem <- table$`mean_Mus musculus`
+table$Mousepm <- '$\\pm$'
+table$Mousesd <- table$`sd_Mus musculus`
+table <- table %>% select(-contains("Musculus"), -contains("Sapiens"))
+table <- table[, c('variable', 'Humanm', 'Humanpm', 'Humansd', 'Mousem', 'Mousepm','Mousesd','pvalue')]  
+table <- left_join(table, unite) 
+table$unit <- paste0('(', table$unit, ')')
+table$unit[grep( 'up down', table$variable)] <- ''  
+table$variable <- paste0('\\texttt{', table$variable, '} ', table$unit)
+table  <- table %>% select(-unit)  
+table  <- table %>% rename(`p-value` = pvalue)
+label <- 'tbl:ttest'
+caption <- 'Per-species mean $\\pm$ standard deviation for each electrophysiological variable, along with the p-value of the t-test.' 
+source('../../bbp-interneurons-classify/r/paper.R')
+table$variable <-  gsub('_', '\\\\_', table$variable)  
+xtable_print(table, label = label,  caption  = caption, include.rownames = FALSE, size = 'normalsize', file = 'ttest.tex')
+
+```
+Add this manually into ttest.tex:
+
+      \begin{tabular}{lr@{\hskip 1pt}c@{\hskip 1pt}lr@{\hskip 1pt}c@{\hskip 1pt}lr}
+      Variable & \multicolumn{3}{c}{Human} & \multicolumn{3}{c}{Mouse} & p-value \\    
+
+# Morphological   
+
+## Ttest
+```{r} 
+tvars <- morphodb %>% select(-species, -specimen_id, -`rel depth`)  %>% mutate(species = morphodb$species)  
+table <- get_ttest_pvals(tvars)  
+table[, -1] <- round(table[, -1], 2)
+indi <- match(c('tortuosity', 'diameter', 'angle'), table$variable)
+table[-indi, -1] <- round(table[-indi, -1], 0)  
+table$Humanm <- table$`mean_Homo Sapiens`
+table$Humanpm <- '$\\pm$'
+table$Humansd <- table$`sd_Homo Sapiens`
+table$Mousem <- table$`mean_Mus musculus`
+table$Mousepm <- '$\\pm$'
+table$Mousesd <- table$`sd_Mus musculus`   
+table <- table %>% select(-contains("Musculus"), -contains("Sapiens")) 
+table <- table[, c('variable', 'Humanm', 'Humanpm', 'Humansd', 'Mousem', 'Mousepm','Mousesd','pvalue')]  
+table <- left_join(table, unitm)
+table$unit <- paste0('(', table$unit, ')')
+table$unit[grep( 'tortuosity', table$variable)] <- ''
+table$unit[grep( 'order', table$variable)] <- ''
+table$variable <- paste0('\\texttt{', table$variable, '} ', table$unit)
+table  <- table %>% select(-unit)
+label <- 'tbl:ttest-morpho'
+caption <- 'Per-species mean $\\pm$ standard deviation for each morphological variable, along with the p-value of the t-test.' 
+source('../../bbp-interneurons-classify/r/paper.R')
+table$variable <-  gsub('_', '\\\\_', table$variable)   
+table  <- table %>% rename(`p-value` = pvalue)
+xtable_print(table, label = label,  caption  = caption, include.rownames = FALSE, size = 'normalsize', file = 'ttest-morpho.tex')
+```  
+
+Add this manually into ttest-morpho.tex:
+
+      \begin{tabular}{lr@{\hskip 1pt}c@{\hskip 1pt}lr@{\hskip 1pt}c@{\hskip 1pt}lr}
+      Variable & \multicolumn{3}{c}{Human} & \multicolumn{3}{c}{Mouse} & p-value \\    
+
+## BN of morpho alone    
+```{r}
+db <- morphodb %>% filter(species == 'Homo Sapiens') %>% select(-specimen_id, -species)
+human <- tabu(db, score = "bic-g", tabu = 30, max.tabu = 30)   
+pcorh <- apply(arcs(human), 1, function(x) get_pcor(x[1], x[2], db)) %>% round(digits = 2)
+cor(db$`rel depth`, db$total_length)
+acor <- get_arcs_cor(human, db)
+acor    %>% arrange(`acor.indi.`)
+```
+
+```{r}
+db <- morphodb %>% filter(species == 'Mus musculus') %>% select(-specimen_id, -species)
+mouse <- tabu(db, score = "bic-g", tabu = 30, max.tabu = 30)   
+pcorm <- apply(arcs(mouse), 1, function(x) get_pcor(x[1], x[2], db)) %>% round(digits = 2) 
+acor <- get_arcs_cor(mouse, db) 
+cor(db$`rel depth`, db$total_length)
+cor(db$diameter, db$total_length)
+acor    %>% arrange(`acor.indi.`)
+```
+
+## Save to pdfs
+
+```{r}  
+pdf(file = 'electro-test.pdf', width = 14, height = 7) 
+a <- bnlearn::graphviz.compare(mouse, human, layout = 'fdp', diff = 'none', 
+             edgeAttrs=get_edge_attrs(mouse, pcorm))         
+mgraph <- format_edges(a[[1]], mouse, morphodb, pcorm)
+a <- bnlearn::graphviz.compare(mouse, human, layout = 'fdp', diff = 'none', 
+             edgeAttrs=get_edge_attrs(human, pcorh))
+hgraph <- format_edges(a[[2]], human, morphodb, pcorh) 
+dev.off()  
+pdf(file = 'morpho-mouse.pdf', width = 14, height = 7)  
+graph::nodeRenderInfo(mgraph)[["fontsize"]] = 60 
+Rgraphviz::renderGraph(mgraph) 
+dev.off() 
+pdf(file = 'morpho-human.pdf', width = 14, height = 7)   
+graph::nodeRenderInfo(hgraph)[["fontsize"]] = 60 
+Rgraphviz::renderGraph(hgraph) 
+dev.off()  
+```   
+## Human MB
+```{r} 
+mb(human, 'rel depth')
+marindep <- sapply(nodes(human), function(x) dsep(human, 'rel depth', x))
+nodes(human)[!marindep]
+nodes(human)[marindep]
+mbsh <- lapply(nodes(human), function(x) mb(human, x))
+```
+
+
+## Mouse MB
+```{r}   
+mbsm <- lapply(nodes(mouse), function(x) mb(mouse, x))
+```
+
+## Compare
+```{r} 
+mapply(function(a, b) length(intersect(a, b)) / length(a), mbsh, mbsm)
+mapply(function(a, b) length(intersect(a, b)) / length(b), mbsh, mbsm)
+summary(mapply(function(a, b) length(intersect(a, b)), mbsh, mbsm))
+summary(sapply(mbsh, length))
+summary(sapply(mbsm, length))
+bnlearn::compare(mouse, human, arcs = TRUE  )
+# bnlearn::graphviz.compare(mouse, human, layout = 'fdp')  
+```
+ 
+# EMorpho
+```{r}
+m <- morphodb %>% select(-species)
+stopifnot(length(unique(m$specimen_id)) == nrow(m) ) 
+jep <- ep %>% select(-`rel depth`)
+m <- left_join(m, jep, by = 'specimen_id')
+stopifnot(length(unique(m$specimen_id)) == nrow(m) )
+``` 
+
+- I guess the params cost really little in the Gaussian case, and the BIC is not really good here...
+- Again, spurious stuff; the increases should be minimal.
+- More arcs with black list in human!
+```{r}
+db <- m %>% filter(species != 'Mus musculus') %>% select(-reconstruction_type, -structure_layer_name, -specimen_id, -species)  
+human <- tabu(db, score = "bic-g", tabu = 30, max.tabu = 30, blacklist = get_blacklist(morphodb, ep))   
+human <- tabu(db, score = "bic-g", tabu = 30, max.tabu = 30)   
+pcorh <- apply(arcs(human), 1, function(x) get_pcor(x[1], x[2], db)) %>% round(digits = 2) 
+cor(db$tortuosity, db$peak)
+cor(db$resistance, db$total_length)
+cor(db$resistance, db$width)
+acor <- get_arcs_cor(human, db)  %>% mutate(pcor = pcorh)
+acor    %>% arrange(`acor.indi.`)
+acor %>% filter(to %in% "angle" | par %in% "angle")
+```  
+   
+- For the direction; morpho to electo, make it that way? Use causality.
+- It's including some very weak correlations. BIC should be OK with samp size... 
+```{r}
+db <- m %>% filter(species == 'Mus musculus') %>% select(-reconstruction_type, -structure_layer_name, -specimen_id, -species) 
+mouse <- tabu(db, score = "bic-g", tabu = 30, max.tabu = 30, blacklist = get_blacklist(morphodb, ep))  
+mouse <- tabu(db, score = "bic-g", tabu = 30, max.tabu = 30)
+pcorm <- apply(arcs(mouse), 1, function(x) get_pcor(x[1], x[2], db)) %>% round(digits = 2) 
+cor(db$resistance, db$distance)
+cor(db$resistance, db$width)
+cor(db$resistance, db$diameter)
+cor(db$resistance, db$tortuosity)
+acor <- get_arcs_cor(mouse, db)   %>% mutate(pcor = pcorh)
+acor    %>% arrange(`acor.indi.`) 
+library(gplots)
+rho <- cor(db)
+heatmap.2(rho, scale = "none", trace = "none", revC = TRUE)
+```
+
+# Plot    
+```{r}  
+uke <- get_edge_attrs(mouse, pcorm)
+uke$label <- uke$label[1:3]  
+guke <- get_edge_attrs(human, pcorh)
+guke$label <- guke$label[1:3]
+```
+
+
+```{r}  
+sizef <- 2.5
+pdf(file = 'electro-test.pdf', width = 14 * sizef, height = 7 * sizef) 
+a <- bnlearn::graphviz.compare(mouse, human, layout = 'fdp', diff = 'none', 
+             edgeAttrs=get_edge_attrs(mouse, pcorm))
+             # edgeAttrs=NULL)
+             # edgeAttrs=list())
+mgraph <- format_edges(a[[1]], mouse, morphodb, pcorm)
+a <- bnlearn::graphviz.compare(mouse, human, layout = 'fdp', diff = 'none', 
+             edgeAttrs=get_edge_attrs(human, pcorh))
+             # edgeAttrs=get_edge_attrs(mouse, pcorm))
+             # edgeAttrs=NULL)
+             # edgeAttrs=list())
+hgraph <- format_edges(a[[2]], human, morphodb, pcorh) 
+dev.off()  
+pdf(file = 'electrom-mouse.pdf', width = 14 * sizef, height = 7 * sizef) 
+graph::nodeRenderInfo(mgraph)[["fontsize"]] = 50 
+Rgraphviz::renderGraph(mgraph) 
+dev.off() 
+pdf(file = 'electrom-human.pdf', width = 14 * sizef, height = 7 * sizef) 
+graph::nodeRenderInfo(hgraph)[["fontsize"]] = 50 
+Rgraphviz::renderGraph(hgraph) 
+dev.off()  
+```
+
+```{r}  
+em_arcs(human)
+em_arcs(mouse)
+```
+
+## Human mb
+```{r} 
+mbsh <- lapply(nodes(human), function(x) mb(human, x))
+mbsh <- setNames(mbsh, nodes(human))
+sapply(mbsh, length)
+```
+
+
+```{r} 
+mbe <- mbsh[get_evars(human, morphodb)] 
+mbe <- sapply(mbe, function(x) intersect(x, get_mvars(human, morphodb)))
+sapply(mbe, length)
+setdiff(get_mvars(human, morphodb), unique(unlist(mbe)))  
+```
+
+```{r} 
+mbe <- mbsh[get_mvars(human, morphodb)] 
+mbe <- sapply(mbe, function(x) intersect(x, get_evars(human, morphodb)))
+sapply(mbe, length)
+setdiff(get_evars(human, morphodb), unique(unlist(mbe)))  
+```
+
+## Mouse MB
+s/human/mouse/g
+```{r} 
+mbsh <- lapply(nodes(mouse), function(x) mb(mouse, x))
+mbsh <- setNames(mbsh, nodes(mouse))
+sapply(mbsh, length)
+```
+```{r}
+mbsh['resistance']
+mbsh['rel depth']
+```
+
+
+```{r} 
+mbe <- mbsh[get_evars(mouse, morphodb)] 
+mbe <- sapply(mbe, function(x) intersect(x, get_mvars(mouse, morphodb)))
+sapply(mbe, length)
+setdiff(get_mvars(mouse, morphodb), unique(unlist(mbe)))  
+```
+
+## Compare
+```{r}
+bnlearn::compare(human, mouse, arcs = TRUE)
+```
+```{r} 
+mbsh <- lapply(nodes(human), function(x) mb(human, x))
+mbsm <- lapply(nodes(mouse), function(x) mb(mouse, x))
+mapply(function(a, b) length(intersect(a, b)), mbsh, mbsm)
+a <- mapply(function(a, b) length(intersect(a, b)) / length(a), mbsh, mbsm)
+b <- mapply(function(a, b) length(intersect(a, b)) / length(b), mbsh, mbsm)
+which(a == 1 & b == 1)
+```
+
